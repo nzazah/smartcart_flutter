@@ -2,10 +2,55 @@ import 'dart:io';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:projectzazah/theme_notifier.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../provider/cart_provider.dart';
+import '../theme_notifier.dart';
+import 'edit_profile_page.dart';
+import 'cart_history_page.dart';
 
-class ProfilePage extends StatelessWidget {
-  const ProfilePage({super.key});
+class ProfilePage extends StatefulWidget {
+  final VoidCallback onLogout;
+
+  const ProfilePage({super.key, required this.onLogout});
+
+  @override
+  State<ProfilePage> createState() => _ProfilePageState();
+}
+
+class _ProfilePageState extends State<ProfilePage> {
+  String name = '';
+  String email = '';
+  String phone = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadUserDataFromSupabase();
+  }
+
+  Future<void> _loadUserDataFromSupabase() async {
+    final user = Supabase.instance.client.auth.currentUser;
+    if (user != null) {
+      final response = await Supabase.instance.client
+          .from('profiles')
+          .select()
+          .eq('id', user.id)
+          .single();
+
+      setState(() {
+        name = response['name'] ?? 'Guest';
+        email = user.email ?? 'Not available';
+        phone = response['phone'] ?? 'Not set';
+      });
+    }
+  }
+
+  Future<void> _handleLogout() async {
+    final cartProvider = Provider.of<CartProvider>(context, listen: false);
+    cartProvider.clearCart();
+    await Supabase.instance.client.auth.signOut();
+    widget.onLogout();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -57,10 +102,6 @@ class ProfilePage extends StatelessWidget {
         ? CupertinoPageScaffold(
       navigationBar: CupertinoNavigationBar(
         middle: Text("Profile", style: TextStyle(fontSize: headerFontSize)),
-        leading: GestureDetector(
-          onTap: () => Navigator.pop(context),
-          child: const Icon(CupertinoIcons.back),
-        ),
       ),
       child: body,
     )
@@ -77,22 +118,13 @@ class ProfilePage extends StatelessWidget {
           ),
         ),
         centerTitle: true,
-        leading: IconButton(
-          icon: Icon(Icons.arrow_back,
-              color: Theme.of(context).iconTheme.color, size: iconSize),
-          onPressed: () => Navigator.pop(context),
-        ),
       ),
       body: body,
     );
   }
 
   Widget _buildProfileHeader(
-      BuildContext context,
-      double avatarSize,
-      double headerFontSize,
-      double subHeaderFontSize,
-      ) {
+      BuildContext context, double avatarSize, double headerFontSize, double subHeaderFontSize) {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(vertical: 24),
@@ -113,43 +145,38 @@ class ProfilePage extends StatelessWidget {
             backgroundImage: const AssetImage("assets/profile.jpg"),
           ),
           const SizedBox(height: 16),
-          Text(
-            "Nur Azizah Fitria",
-            style: TextStyle(fontSize: headerFontSize, fontWeight: FontWeight.bold),
-          ),
-          Text(
-            "zazah25@gmail.com",
-            style: TextStyle(fontSize: subHeaderFontSize, color: Colors.grey),
-          ),
+          Text(name, style: TextStyle(fontSize: headerFontSize, fontWeight: FontWeight.bold)),
+          Text(email, style: TextStyle(fontSize: subHeaderFontSize, color: Colors.grey)),
+          Text("Phone: $phone", style: TextStyle(fontSize: subHeaderFontSize, color: Colors.grey)),
         ],
       ),
     );
   }
 
-  Widget _buildProfileMenu(
-      BuildContext context,
-      double iconSize,
-      double fontSize,
-      ) {
+  Widget _buildProfileMenu(BuildContext context, double iconSize, double fontSize) {
     return Column(
       children: [
-        _buildMenuItem(Icons.edit, "Edit Profile", () {}, iconSize, fontSize),
-        _buildMenuItem(Icons.card_giftcard, "Discount Voucher", () {}, iconSize, fontSize),
-        _buildMenuItem(Icons.support_agent, "Support", () {}, iconSize, fontSize),
+        _buildMenuItem(Icons.edit, "Edit Profile", () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const EditProfilePage()),
+          );
+          _loadUserDataFromSupabase();
+        }, iconSize, fontSize),
+        _buildMenuItem(Icons.history, "Shopping History", () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const CartHistoryPage()),
+          );
+        }, iconSize, fontSize),
         _buildMenuItem(Icons.settings, "Settings", () {}, iconSize, fontSize),
-        _buildMenuItem(Icons.logout, "Log Out", () {}, iconSize, fontSize, isLogout: true),
+        _buildMenuItem(Icons.logout, "Log Out", _handleLogout, iconSize, fontSize, isLogout: true),
       ],
     );
   }
 
-  Widget _buildMenuItem(
-      IconData icon,
-      String title,
-      VoidCallback onTap,
-      double iconSize,
-      double fontSize, {
-        bool isLogout = false,
-      }) {
+  Widget _buildMenuItem(IconData icon, String title, VoidCallback onTap, double iconSize,
+      double fontSize, {bool isLogout = false}) {
     return ListTile(
       leading: Icon(icon, color: isLogout ? Colors.deepPurple : null, size: iconSize),
       title: Text(
@@ -165,13 +192,8 @@ class ProfilePage extends StatelessWidget {
     );
   }
 
-  Widget _buildCupertinoSwitch(
-      String title,
-      bool value,
-      ValueChanged<bool> onChanged,
-      double iconSize,
-      double fontSize,
-      ) {
+  Widget _buildCupertinoSwitch(String title, bool value, ValueChanged<bool> onChanged,
+      double iconSize, double fontSize) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 12.0),
       child: Row(

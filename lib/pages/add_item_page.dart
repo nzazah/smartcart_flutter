@@ -1,6 +1,9 @@
 import 'dart:io';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../provider/cart_provider.dart';
 
 class AddItemPage extends StatefulWidget {
   @override
@@ -8,76 +11,94 @@ class AddItemPage extends StatefulWidget {
 }
 
 class _AddItemPageState extends State<AddItemPage> {
-  Map<String, int> cart = {
-    "Beras Premium 5kg": 1,
-    "Minyak Goreng 2L": 1,
-  };
-
-  Map<String, double> prices = {
-    "Beras Premium 5kg": 65.00,
-    "Minyak Goreng 2L": 35.00,
-    "Delivery": 5.00,
-  };
-
   double userBudget = 0.0;
   final TextEditingController budgetController = TextEditingController();
-
-  void _increaseItem(String item) {
-    setState(() {
-      cart[item] = cart[item]! + 1;
-    });
-  }
-
-  void _decreaseItem(String item) {
-    setState(() {
-      if (cart[item]! > 1) {
-        cart[item] = cart[item]! - 1;
-      } else {
-        cart.remove(item);
-      }
-    });
-  }
-
-  double _calculateTotal() {
-    double total = 0;
-    cart.forEach((item, quantity) {
-      total += prices[item]! * quantity;
-    });
-    total += prices["Delivery"]!;
-    return total;
-  }
-
-  bool _isOverBudget() {
-    return _calculateTotal() > userBudget;
-  }
+  final supabase = Supabase.instance.client;
 
   void _showOverBudgetDialog() {
-    if (Platform.isIOS) {
-      showCupertinoDialog(
-        context: context,
-        builder: (_) => CupertinoAlertDialog(
-          title: Text("Budget Melebihi!"),
-          content: Text("Total belanja Anda melebihi anggaran."),
-          actions: [
-            CupertinoDialogAction(
-              child: Text("OK"),
-              onPressed: () => Navigator.pop(context),
-            )
-          ],
+    final dialog = Platform.isIOS
+        ? CupertinoAlertDialog(
+      title: Text("Budget Melebihi!"),
+      content: Text("Total belanja Anda melebihi anggaran."),
+      actions: [
+        CupertinoDialogAction(
+          child: Text("OK"),
+          onPressed: () => Navigator.pop(context),
+        )
+      ],
+    )
+        : AlertDialog(
+      title: Text("Budget Melebihi!"),
+      content: Text("Total belanja Anda melebihi anggaran."),
+      actions: [
+        TextButton(
+          child: Text("OK"),
+          onPressed: () => Navigator.pop(context),
+        )
+      ],
+    );
+
+    showDialog(context: context, builder: (_) => dialog);
+  }
+
+  Future<void> _saveCartToDatabase() async {
+    final user = supabase.auth.currentUser;
+    if (user == null) return;
+
+    final cartProvider = Provider.of<CartProvider>(context, listen: false);
+    final cart = cartProvider.cart;
+
+    if (cart.isEmpty) return;
+
+    try {
+      final cartInsert = await supabase.from('carts').insert({
+        'user_id': user.id,
+        'created_at': DateTime.now().toUtc().toIso8601String(),
+      }).select().single();
+
+      final cartId = cartInsert['id'];
+
+      final List<Map<String, dynamic>> cartItemsData = [];
+
+      for (var entry in cart.entries) {
+        final name = entry.key;
+        final qty = entry.value;
+        final productResult = await supabase
+            .from('products')
+            .select('id')
+            .eq('name', name)
+            .maybeSingle();
+
+        final productId = productResult?['id'];
+        if (productId != null) {
+          cartItemsData.add({
+            'cart_id': cartId,
+            'product_id': productId,
+            'quantity': qty,
+            'created_at': DateTime.now().toUtc().toIso8601String(),
+          });
+        }
+      }
+
+      if (cartItemsData.isNotEmpty) {
+        await supabase.from('cart_items').insert(cartItemsData);
+      }
+
+      cartProvider.clearCart();
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("Rencana belanja disimpan ke database."),
+          duration: Duration(seconds: 2),
+          backgroundColor: Colors.green,
         ),
       );
-    } else {
-      showDialog(
-        context: context,
-        builder: (_) => AlertDialog(
-          title: Text("Budget Melebihi!"),
-          content: Text("Total belanja Anda melebihi anggaran."),
-          actions: [
-            TextButton(
-              child: Text("OK"),
-              onPressed: () => Navigator.pop(context),
-            )
-          ],
+    } catch (e) {
+      print("❌ Gagal menyimpan: $e");
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("Gagal menyimpan rencana belanja."),
+          backgroundColor: Colors.red,
         ),
       );
     }
@@ -86,62 +107,48 @@ class _AddItemPageState extends State<AddItemPage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final cartProvider = Provider.of<CartProvider>(context);
+    final cart = cartProvider.cart;
+    final total = cartProvider.getTotal();
+    final isOverBudget = total > userBudget;
 
     return Scaffold(
-      backgroundColor: theme.scaffoldBackgroundColor,
       appBar: AppBar(
-        title: Text("Keranjang Saya", style: theme.textTheme.titleLarge),
-        centerTitle: true,
-        leading: Platform.isIOS
-            ? CupertinoButton(
-          padding: EdgeInsets.zero,
-          child: Icon(CupertinoIcons.back, color: theme.iconTheme.color),
-          onPressed: () => Navigator.pop(context),
-        )
-            : IconButton(
-          icon: Icon(Icons.arrow_back, color: theme.iconTheme.color),
-          onPressed: () => Navigator.pop(context),
-        ),
+        title: const Text("Keranjang"),
       ),
-      body: LayoutBuilder(
-        builder: (context, constraints) {
-          final isTablet = constraints.maxWidth >= 600;
-
-          return Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Column(
-              children: [
-                _buildBudgetInput(theme),
-                SizedBox(height: 12),
-                Expanded(
-                  child: ListView(
-                    children: cart.keys.map((item) {
-                      return _buildCartItem(theme, item, isTablet);
-                    }).toList(),
-                  ),
-                ),
-                _buildPriceSummary(theme),
-                if (_isOverBudget())
-                  Platform.isIOS
-                      ? CupertinoButton.filled(
-                    child: Text("Perhatian: Budget Melebihi"),
-                    onPressed: _showOverBudgetDialog,
-                    padding: EdgeInsets.symmetric(horizontal: 20),
-                  )
-                      : Padding(
-                    padding: EdgeInsets.all(8),
-                    child: ElevatedButton.icon(
-                      icon: Icon(Icons.warning),
-                      label: Text("Perhatian: Budget Melebihi"),
-                      style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.redAccent),
-                      onPressed: _showOverBudgetDialog,
-                    ),
-                  ),
-              ],
+      body: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: [
+            _buildBudgetInput(theme),
+            const SizedBox(height: 12),
+            Expanded(
+              child: ListView(
+                children: cart.entries.map((entry) {
+                  final item = entry.key;
+                  final qty = entry.value;
+                  final price = cartProvider.prices[item] ?? 0;
+                  final imageUrl = cartProvider.images[item] ?? "";
+                  return _buildCartItem(theme, item, qty, price, imageUrl);
+                }).toList(),
+              ),
             ),
-          );
-        },
+            _buildPriceSummary(theme, total),
+            const SizedBox(height: 12),
+            ElevatedButton.icon(
+              icon: Icon(Icons.save),
+              label: Text("Simpan Rencana Belanja"),
+              onPressed: _saveCartToDatabase,
+            ),
+            if (userBudget > 0 && isOverBudget)
+              ElevatedButton.icon(
+                icon: const Icon(Icons.warning),
+                label: const Text("Perhatian: Budget Melebihi"),
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                onPressed: _showOverBudgetDialog,
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -151,42 +158,28 @@ class _AddItemPageState extends State<AddItemPage> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text("Budget Anda:",
-            style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
+            style: theme.textTheme.titleMedium
+                ?.copyWith(fontWeight: FontWeight.bold)),
         Row(
           children: [
             Expanded(
-              child: Platform.isIOS
-                  ? CupertinoTextField(
-                controller: budgetController,
-                placeholder: "Masukkan budget",
-                keyboardType: TextInputType.number,
-              )
-                  : TextField(
+              child: TextField(
                 controller: budgetController,
                 keyboardType: TextInputType.number,
-                decoration: InputDecoration(
+                decoration: const InputDecoration(
                   hintText: "Masukkan budget",
                   border: OutlineInputBorder(),
                 ),
               ),
             ),
-            SizedBox(width: 8),
-            Platform.isIOS
-                ? CupertinoButton(
-              child: Text("Set"),
+            const SizedBox(width: 8),
+            ElevatedButton(
               onPressed: () {
                 setState(() {
                   userBudget = double.tryParse(budgetController.text) ?? 0.0;
                 });
               },
-            )
-                : ElevatedButton(
-              onPressed: () {
-                setState(() {
-                  userBudget = double.tryParse(budgetController.text) ?? 0.0;
-                });
-              },
-              child: Text("Set"),
+              child: const Text("Set"),
             ),
           ],
         ),
@@ -194,34 +187,51 @@ class _AddItemPageState extends State<AddItemPage> {
     );
   }
 
-  Widget _buildCartItem(ThemeData theme, String item, bool isTablet) {
+  Widget _buildCartItem(
+      ThemeData theme, String item, int qty, double price, String imageUrl) {
+    final cartProvider = Provider.of<CartProvider>(context, listen: false);
+
     return Card(
-      margin: EdgeInsets.symmetric(vertical: 6),
+      margin: const EdgeInsets.symmetric(vertical: 6),
       child: Padding(
-        padding: EdgeInsets.all(10),
+        padding: const EdgeInsets.all(10),
         child: Row(
           children: [
-            Icon(Icons.shopping_cart, size: isTablet ? 50 : 40, color: theme.colorScheme.primary),
-            SizedBox(width: 8),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: imageUrl.isNotEmpty
+                  ? Image.network(
+                imageUrl,
+                width: 60,
+                height: 60,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) =>
+                    Icon(Icons.broken_image, size: 60),
+              )
+                  : Icon(Icons.image, size: 60),
+            ),
+            const SizedBox(width: 8),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(item, style: theme.textTheme.bodyLarge),
-                  Text("Rp ${prices[item]!.toStringAsFixed(3)}"),
+                  Text("Rp ${price.toStringAsFixed(3)}"),
                 ],
               ),
             ),
             Row(
               children: [
                 IconButton(
-                  icon: Icon(Icons.remove_circle_outline, color: Colors.red),
-                  onPressed: () => _decreaseItem(item),
+                  icon: const Icon(Icons.remove_circle_outline, color: Colors.red),
+                  onPressed: () => cartProvider.removeItem(item),
                 ),
-                Text("${cart[item]}"),
+                Text("$qty"),
                 IconButton(
-                  icon: Icon(Icons.add_circle_outline, color: theme.colorScheme.primary),
-                  onPressed: () => _increaseItem(item),
+                  icon: Icon(Icons.add_circle_outline,
+                      color: theme.colorScheme.primary),
+                  onPressed: () =>
+                      cartProvider.addItem(item, price, imageUrl),
                 ),
               ],
             ),
@@ -231,11 +241,10 @@ class _AddItemPageState extends State<AddItemPage> {
     );
   }
 
-  Widget _buildPriceSummary(ThemeData theme) {
-    final total = _calculateTotal();
+  Widget _buildPriceSummary(ThemeData theme, double total) {
     return Container(
-      margin: EdgeInsets.only(top: 12),
-      padding: EdgeInsets.all(10),
+      margin: const EdgeInsets.only(top: 12),
+      padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
         color: theme.cardColor,
         borderRadius: BorderRadius.circular(10),
@@ -243,9 +252,12 @@ class _AddItemPageState extends State<AddItemPage> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text("Total", style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
+          Text("Total",
+              style: theme.textTheme.titleMedium
+                  ?.copyWith(fontWeight: FontWeight.bold)),
           Text("Rp ${total.toStringAsFixed(3)}",
-              style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
+              style: theme.textTheme.titleMedium
+                  ?.copyWith(fontWeight: FontWeight.bold)),
         ],
       ),
     );
